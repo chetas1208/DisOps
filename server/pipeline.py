@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import PipelineEvent, utc_now_iso
+from .reasoning import reason as kimi_reason, reasoning_available
 
 _HAZARD_KEYWORDS: dict[str, tuple[str, ...]] = {
     "fire": ("fire", "flame", "flames", "burning"),
@@ -109,32 +110,63 @@ def analyze_frame(frame_data_url: str, *, frame_index: int) -> PipelineEvent:
         hazards = _classify_hazards(text)
         urgency = _urgency_for(hazard, hazards, direction)
         backend = (last_backend() or "vision").replace("_", " ")
+        people = 1 if re.search(r"person|people|crowd", text.lower()) else 0
+
+        # Heuristic defaults — overridden by GMI Kimi K2 reasoning when available.
+        situation = text if hazard else "No active incident."
+        voice_guidance = text if hazard else "All clear. Continue monitoring."
+        reasoning_summary = (
+            f"{backend} backend flagged a hazard; recommending the clearest path."
+            if hazard
+            else f"{backend} backend reports a clear scene."
+        )
+        next_check = "Confirm the recommended path stays clear on the next frame."
+        safest_next_action = _direction_phrase(direction) if hazard else "Proceed normally."
+        uncertainty = "Live single-frame analysis; confidence improves across frames."
+        kimi_ms = max(40, elapsed_ms // 3)
+
+        # --- GMI Kimi K2 emergency reasoning (only when a hazard is present) ---
+        if hazard and reasoning_available():
+            try:
+                t1 = time.perf_counter()
+                guidance = kimi_reason(
+                    scene_summary=text,
+                    hazards=hazards,
+                    direction=direction,
+                    people_detected=people,
+                )
+                kimi_ms = int((time.perf_counter() - t1) * 1000)
+                urgency = guidance["urgency"]
+                situation = guidance["situation"] or situation
+                voice_guidance = guidance["voice_guidance"] or voice_guidance
+                reasoning_summary = guidance["reasoning_summary"] or reasoning_summary
+                next_check = guidance["next_check"] or next_check
+                safest_next_action = guidance["safest_next_action"] or safest_next_action
+                uncertainty = guidance["uncertainty"] or uncertainty
+            except Exception as exc:  # noqa: BLE001 - fall back to heuristic guidance
+                reasoning_summary = f"{reasoning_summary} (Kimi K2 unavailable: {str(exc).splitlines()[0][:80]})"
 
         return PipelineEvent(
             frame_id=frame_id,
             urgency=urgency,  # type: ignore[arg-type]
             scene_summary=text,
-            situation=text if hazard else "No active incident.",
-            voice_guidance=(text if hazard else "All clear. Continue monitoring."),
-            reasoning_summary=(
-                f"{backend} backend flagged a hazard; recommending the clearest path."
-                if hazard
-                else f"{backend} backend reports a clear scene."
-            ),
-            next_check="Confirm the recommended path stays clear on the next frame.",
-            safest_next_action=_direction_phrase(direction) if hazard else "Proceed normally.",
-            uncertainty="Live single-frame analysis; confidence improves across frames.",
+            situation=situation,
+            voice_guidance=voice_guidance,
+            reasoning_summary=reasoning_summary,
+            next_check=next_check,
+            safest_next_action=safest_next_action,
+            uncertainty=uncertainty,
             risk_level=urgency,
             detected_hazards=hazards,
             detected_objects=hazards or ["scene"],
-            people_detected=1 if re.search(r"person|people|crowd", text.lower()) else 0,
+            people_detected=people,
             environment_conditions=["live camera"],
             motion_changes="Live",
             confidence=0.86 if hazard else 0.9,
-            latency_ms=elapsed_ms,
+            latency_ms=elapsed_ms + kimi_ms,
             stage_durations={
                 "vision_models": elapsed_ms,
-                "kimi_k2": max(40, elapsed_ms // 3),
+                "kimi_k2": kimi_ms,
                 "tts": 180,
             },
             source="live",
