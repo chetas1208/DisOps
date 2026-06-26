@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en" data-urgency="Low">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DisOps — Live Disaster Response Agent</title>
+  <meta name="description" content="DisOps: real-time vision-to-voice emergency guidance. Watches the scene, detects hazards, reasons about the safest next move, and speaks instructions instantly." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <!-- Critical full-screen banner (shown only in Critical state) -->
+  <div id="critical-banner" class="critical-banner" hidden>
+    <span class="critical-banner__dot"></span>
+    <span id="critical-banner-text">Immediate danger detected. Act now.</span>
+  </div>
+
+  <!-- 1. TOP NAVIGATION BAR -->
+  <header class="topbar">
+    <div class="topbar__brand">
+      <div class="logo" aria-hidden="true">
+        <span class="logo__pulse"></span>
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 6v6c0 5 3.4 7.8 8 10 4.6-2.2 8-5 8-10V6z"/><path d="M9 12l2 2 4-4"/></svg>
+      </div>
+      <div class="topbar__title">
+        <h1>DisOps</h1>
+        <p>Live Disaster Response Agent</p>
+      </div>
+    </div>
+
+    <div id="status-chips" class="status-chips"></div>
+
+    <div class="topbar__meta">
+      <div class="metric">
+        <span class="metric__label">Latency</span>
+        <span class="metric__value" id="latency-value">—</span>
+      </div>
+      <div class="metric">
+        <span class="metric__label">Frame interval</span>
+        <span class="metric__value" id="interval-value">2.5s</span>
+      </div>
+      <button id="session-btn" class="btn btn--primary">Start Session</button>
+    </div>
+  </header>
+
+  <!-- Hero copy -->
+  <section class="hero-copy">
+    <h2>Real-time emergency guidance from live video.</h2>
+    <p>DisOps watches the scene, detects hazards, reasons through the safest next move, and speaks instructions instantly.</p>
+  </section>
+
+  <main class="layout">
+    <!-- 2. HERO / MAIN DASHBOARD -->
+    <section class="dashboard">
+      <div id="video-panel" class="panel video-panel"></div>
+      <div id="guidance-panel" class="panel guidance-panel"></div>
+    </section>
+
+    <!-- 3. PIPELINE VISUALIZATION -->
+    <section class="panel pipeline-panel">
+      <div class="panel__head">
+        <h3>Agent Pipeline</h3>
+        <span class="panel__sub">Camera → Vision → Cloudflare → Kimi K2 → Voice → Speaker</span>
+      </div>
+      <div id="pipeline-graph" class="pipeline-graph"></div>
+    </section>
+
+    <!-- 4 & 5. ANALYSIS + REASONING -->
+    <section class="analysis-row">
+      <div id="scene-analysis" class="panel"></div>
+      <div id="agent-reasoning" class="panel"></div>
+    </section>
+
+    <!-- 6 & 7. TIMELINE + CONTROLS -->
+    <section class="ops-row">
+      <div id="event-timeline" class="panel timeline-panel"></div>
+      <div id="session-controls" class="panel controls-panel"></div>
+    </section>
+
+    <!-- 8. SAFETY NOTICE -->
+    <div id="safety-notice"></div>
+  </main>
+
+  <footer class="footer">
+    <span>DisOps</span> · Real-time vision-to-voice emergency guidance · Demo build for AI agents hackathon
+  </footer>
+
+  <script type="module" src="/js/main.js"></script>
+</body>
+</html>
