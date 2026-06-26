@@ -98,33 +98,42 @@ const HAZARD_BOXES = {
   medical: { label: "Medical", top: 58, left: 30, w: 40, h: 30 },
 };
 
-const STAGES = [
-  { key: "camera", name: "Camera Capture", icon: "camera" },
-  { key: "frame_sharding", name: "Frame Sharding", icon: "shard" },
-  { key: "vision_models", name: "Local Vision", icon: "eye" },
-  { key: "cloudflare_tunnel", name: "Cloudflare Tunnel", icon: "cloud" },
-  { key: "kimi_k2", name: "GMI Kimi K2", icon: "brain" },
-  { key: "tts", name: "Voice / TTS", icon: "voice" },
-  { key: "speaker", name: "Speaker Output", icon: "speaker" },
-];
-
-const CHIPS = [
-  { key: "camera", label: "Camera", on: "Live" },
-  { key: "vision_models", label: "Vision Models", on: "Running" },
-  { key: "kimi_k2", label: "Kimi K2", on: "Reasoning" },
-  { key: "tts", label: "Voice", on: "Streaming" },
-];
+const STAGES = [];
+const CHIPS = [];
 
 /* ============================================================================
-   APP STATE
+   APP STATE — populated from /api/state on load (not hardcoded)
    ============================================================================ */
 const state = {
-  status: { running: false, paused: false, muted: false, demo_mode: true, scenario: "fire_smoke", vision_backend_available: false, frame_interval_s: 2.5 },
+  status: { running: false, paused: false, muted: false, demo_mode: false, frame_interval_s: 2.5 },
+  config: null,
   scenarios: [],
   event: null,
   log: [],
   wsConnected: false,
 };
+
+function pipelineStages() {
+  return state.config?.pipeline?.stages || STAGES;
+}
+function statusChips() {
+  return state.config?.pipeline?.chips || CHIPS;
+}
+function idleGuidance() {
+  return state.config?.idle_guidance || "Monitoring your environment. I'll speak up if I detect danger.";
+}
+function idleSituation() {
+  return state.config?.idle_situation || "Monitoring environment…";
+}
+function visionLabel() {
+  return state.config?.vision_model_label || "Vision";
+}
+function reasoningLabel() {
+  return state.config?.reasoning_model_label || "Reasoning";
+}
+function frameIntervalMs() {
+  return Math.round((state.status.frame_interval_s || 2.5) * 1000);
+}
 
 let mediaStream = null;
 let frameTimer = null;
@@ -137,7 +146,7 @@ function renderVideoPanel() {
   const ev = state.event;
   const hazards = ev?.detected_hazards || [];
   const running = state.status.running;
-  const cf = ev?.pipeline_status?.cloudflare_tunnel || (running ? "connected" : "idle");
+  const visionStatus = ev?.pipeline_status?.vision_models || (running ? "complete" : "idle");
 
   const overlay = el("div", { class: "hazard-overlay" });
   hazards.forEach((h) => {
@@ -169,7 +178,7 @@ function renderVideoPanel() {
     metaItem("Frame shard", ev ? ev.frame_id : "—"),
     metaItem("Last analyzed", ev ? formatClock(ev.timestamp) : "—"),
     metaItem("Frame interval", `${state.status.frame_interval_s || 2.5}s`),
-    metaItem("Cloudflare tunnel", titleCase(cf), cf === "connected" ? "ok" : "off"),
+    metaItem("Vision backend", titleCase(visionStatus), visionStatus === "complete" ? "ok" : "off"),
   ]);
 
   const panel = $("#video-panel");
@@ -192,8 +201,8 @@ function metaItem(label, value, cls = "") {
 function renderGuidancePanel() {
   const ev = state.event;
   const urgency = ev?.urgency || "Low";
-  const guidance = ev?.voice_guidance || "Monitoring your environment. I'll speak up if I detect danger.";
-  const situation = ev?.situation || "Monitoring environment…";
+  const guidance = ev?.voice_guidance || idleGuidance();
+  const situation = ev?.situation || idleSituation();
   const lowConf = ev && ev.confidence < 0.6;
 
   const guidanceText = lowConf
@@ -216,7 +225,7 @@ function renderGuidancePanel() {
       el("div", { class: "waveform__status", id: "wave-status", text: speaking ? "Voice streaming…" : (state.status.muted ? "Voice muted" : "Voice idle") }),
     ]),
     el("div", { class: "guidance-actions" }, [
-      el("button", { class: "btn", html: svg("replay", 16) + "<span>Replay Guidance</span>", onclick: () => { API.replay(); speak(state.event?.voice_guidance); } }),
+      el("button", { class: "btn", html: svg("replay", 16) + "<span>Replay Guidance</span>", onclick: () => API.replay() }),
       el("button", {
         class: state.status.muted ? "btn btn--active" : "btn",
         id: "mute-btn",
@@ -238,8 +247,9 @@ function renderGuidancePanel() {
    ============================================================================ */
 function renderPipeline(statuses = {}, durations = {}) {
   const graph = $("#pipeline-graph");
+  const stages = pipelineStages();
   const nodes = [];
-  STAGES.forEach((s, i) => {
+  stages.forEach((s, i) => {
     const status = statuses[s.key] || "idle";
     const dur = durations[s.key];
     nodes.push(
@@ -254,7 +264,7 @@ function renderPipeline(statuses = {}, durations = {}) {
         ]),
       ])
     );
-    if (i < STAGES.length - 1) {
+    if (i < stages.length - 1) {
       nodes.push(el("div", { class: "pstage__connector", html: svg("arrow", 18) }));
     }
   });
@@ -262,7 +272,7 @@ function renderPipeline(statuses = {}, durations = {}) {
 }
 function updatePipelineProgress(data) {
   const { statuses = {}, duration_ms, active } = data;
-  STAGES.forEach((s) => {
+  pipelineStages().forEach((s) => {
     const node = $(`.pstage[data-key="${s.key}"]`);
     if (!node) return;
     const status = statuses[s.key] || "idle";
@@ -281,7 +291,7 @@ function updatePipelineProgress(data) {
 function renderSceneAnalysis() {
   const ev = state.event;
   const body = el("div", { class: "kv" }, [
-    kvRow("Scene Summary", ev?.scene_summary || "Monitoring environment…"),
+    kvRow("Scene Summary", ev?.scene_summary || idleSituation()),
     kvRowTags("Detected Hazards", ev?.detected_hazards || [], true),
     kvRowTags("Detected Objects", ev?.detected_objects || [], false),
     kvRow("People Detected", String(ev?.people_detected ?? 0)),
@@ -291,7 +301,7 @@ function renderSceneAnalysis() {
     kvRow("Recommended Next Check", ev?.next_check || "Continue monitoring for changes.", true),
   ]);
   $("#scene-analysis").replaceChildren(
-    el("div", { class: "panel__head" }, [el("h3", { text: "Scene Analysis" }), el("span", { class: "panel__sub", text: "vision model output" })]),
+    el("div", { class: "panel__head" }, [el("h3", { text: "Scene Analysis" }), el("span", { class: "panel__sub", text: visionLabel() })]),
     el("div", { class: "panel__body" }, [body])
   );
 }
@@ -312,7 +322,7 @@ function renderReasoning() {
     kvRow("Uncertainty", ev?.uncertainty || "None significant.", true),
   ]);
   $("#agent-reasoning").replaceChildren(
-    el("div", { class: "panel__head" }, [el("h3", { text: "Agent Reasoning" }), el("span", { class: "panel__sub", text: "GMI Kimi K2" })]),
+    el("div", { class: "panel__head" }, [el("h3", { text: "Agent Reasoning" }), el("span", { class: "panel__sub", text: reasoningLabel() })]),
     el("div", { class: "panel__body" }, [body])
   );
 }
@@ -394,7 +404,7 @@ function renderControls() {
   const controls = el("div", { class: "controls-grid" }, [
     el("button", { class: "btn", html: svg(s.paused ? "play" : "pause", 16) + `<span>${s.paused ? "Resume" : "Pause"} Monitoring</span>`, onclick: () => API.pause(!s.paused), disabled: !s.running }),
     el("button", { class: "btn", html: svg("snapshot", 16) + "<span>Capture Snapshot</span>", onclick: API.snapshot, disabled: !s.running }),
-    el("button", { class: "btn", html: svg("replay", 16) + "<span>Replay Instruction</span>", onclick: () => { API.replay(); speak(state.event?.voice_guidance); } }),
+    el("button", { class: "btn", html: svg("replay", 16) + "<span>Replay Instruction</span>", onclick: () => API.replay() }),
     el("button", { class: "btn", html: svg("trash", 16) + "<span>Clear Session</span>", onclick: API.clear }),
   ]);
 
@@ -440,7 +450,7 @@ function renderChips() {
   const ps = state.event?.pipeline_status || {};
   const wrap = $("#status-chips");
   wrap.replaceChildren(
-    ...CHIPS.map((c) => {
+    ...statusChips().map((c) => {
       const active = running && (ps[c.key] ? ps[c.key] !== "idle" : true);
       return el("div", { class: `chip ${active ? "chip--on chip--active" : ""}` }, [
         el("span", { class: "chip__dot" }),
@@ -473,7 +483,14 @@ function renderTopMeta() {
   btn.textContent = state.status.running ? "Stop Session" : "Start Session";
   btn.className = state.status.running ? "btn btn--danger" : "btn btn--primary";
 }
+function applyConfig() {
+  const subtitle = $("#pipeline-subtitle");
+  if (subtitle && state.config?.pipeline?.subtitle) {
+    subtitle.textContent = state.config.pipeline.subtitle;
+  }
+}
 function renderAll() {
+  applyConfig();
   applyUrgency();
   renderTopMeta();
   renderChips();
@@ -560,16 +577,20 @@ function drawFallback() {
   ctx.fillStyle = "rgba(159,176,195,0.55)";
   ctx.font = "16px Inter, sans-serif";
   ctx.textAlign = "center";
-  ctx.fillText("Camera feed unavailable — Demo Mode active", canvas.width / 2, canvas.height / 2);
+  ctx.fillText(
+    state.status.demo_mode ? "Camera feed unavailable — Demo Mode active" : "Camera feed unavailable",
+    canvas.width / 2,
+    canvas.height / 2
+  );
 }
 function startFrameLoop() {
   stopFrameLoop();
-  // Only push real frames when a live backend is configured and demo mode is off.
+  const intervalMs = frameIntervalMs();
   frameTimer = setInterval(async () => {
     if (!state.status.running || state.status.paused || state.status.demo_mode) return;
     const frame = captureFrame();
     if (frame) await API.frame(frame);
-  }, 2500);
+  }, intervalMs);
 }
 function stopFrameLoop() {
   if (frameTimer) { clearInterval(frameTimer); frameTimer = null; }
@@ -631,6 +652,7 @@ function handleMessage({ type, data }) {
     case "snapshot":
     case "cleared":
       state.status = data.status || state.status;
+      state.config = data.config || state.config;
       state.scenarios = data.scenarios || state.scenarios;
       state.event = data.last_event || (type === "cleared" ? null : state.event);
       state.log = data.log || [];
@@ -638,6 +660,8 @@ function handleMessage({ type, data }) {
       break;
     case "status":
       state.status = data;
+      if (state.status.running && !state.status.demo_mode) startFrameLoop();
+      else stopFrameLoop();
       renderTopMeta(); renderChips(); renderControls(); renderGuidancePanel();
       if (!data.running) { renderBanner(); applyUrgency(); renderVideoPanel(); }
       break;
@@ -646,7 +670,12 @@ function handleMessage({ type, data }) {
       applyUrgency();
       renderTopMeta(); renderChips(); renderBanner();
       renderVideoPanel(); renderGuidancePanel(); renderSceneAnalysis(); renderReasoning();
-      if (data.speak && !state.status.muted) speak(data.voice_guidance);
+      // Server plays GMI TTS on the host machine — sync waveform only.
+      if (data.speak && !state.status.muted) {
+        setWaveform(true);
+        const ms = Math.max(1800, (data.voice_guidance || "").length * 70);
+        setTimeout(() => setWaveform(false), ms);
+      }
       break;
     case "replay":
       state.event = data;
@@ -673,14 +702,27 @@ function formatClock(iso) {
 function nowClock() { return new Date().toLocaleTimeString([], { hour12: false }); }
 
 /* ============================================================================
-   INIT
+   INIT — bootstrap from API, then live WebSocket
    ============================================================================ */
-function init() {
+async function loadBootstrap() {
+  try {
+    const res = await fetch("/api/state");
+    if (!res.ok) return;
+    const data = await res.json();
+    state.status = data.status || state.status;
+    state.config = data.config || state.config;
+    state.scenarios = data.scenarios || [];
+    state.event = data.last_event || null;
+    state.log = data.log || [];
+  } catch {
+    /* offline — WebSocket snapshot will hydrate when server is up */
+  }
+}
+async function init() {
+  await loadBootstrap();
   $("#session-btn").addEventListener("click", toggleSession);
-  renderPipeline();
+  renderPipeline(state.event?.pipeline_status || {}, state.event?.stage_durations || {});
   renderAll();
   connectWS();
-  // Prime speech engine (some browsers require a user gesture; this is harmless).
-  if ("speechSynthesis" in window) window.speechSynthesis.getVoices();
 }
 document.addEventListener("DOMContentLoaded", init);

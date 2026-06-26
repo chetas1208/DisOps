@@ -19,16 +19,21 @@ from typing import Any
 
 from fastapi import WebSocket
 
+from guidance_speech import spoken_guidance
+
+from voice_router import speak_with_fallback, stop_voice
+
+from .config import frontend_config
 from .models import LogEntry, PipelineEvent, utc_now_iso
 from .pipeline import analyze_frame, vision_available
 from .scenarios import DEFAULT_SCENARIO, get_scenario, scenario_list
+from .voice import mark_voice_played, reset_voice, voice_cooldown_allows
 
 # Descriptive pipeline_status values that match the product spec exactly.
 _ACTIVE_STATUS = {
     "camera": "live",
     "frame_sharding": "complete",
     "vision_models": "complete",
-    "cloudflare_tunnel": "connected",
     "kimi_k2": "reasoning_complete",
     "tts": "streaming",
     "speaker": "playing",
@@ -47,7 +52,7 @@ class SessionManager:
         self.running = False
         self.paused = False
         self.muted = False
-        self.demo_mode = True
+        self.demo_mode = False
         self.scenario = DEFAULT_SCENARIO
         self._frame_index = 0
         self._scenario_step = 0
@@ -90,6 +95,7 @@ class SessionManager:
     def snapshot(self) -> dict[str, Any]:
         return {
             "status": self.status(),
+            "config": frontend_config(),
             "scenarios": scenario_list(),
             "last_event": self.last_event.to_dict() if self.last_event else None,
             "log": [entry.to_dict() for entry in self.log],
@@ -118,8 +124,9 @@ class SessionManager:
             self.paused = False
             self._frame_index = 0
             self._scenario_step = 0
+        reset_voice()
         await self._log_event("Camera stream started", "success")
-        await self._log_event("Cloudflare tunnel connected", "info")
+        await self._log_event("GMI vision backend ready", "info")
         await self._emit_status()
         self._ensure_loop()
 
@@ -128,22 +135,29 @@ class SessionManager:
             self.running = False
             self.paused = False
         await self._cancel_loop()
+        stop_voice()
+        reset_voice()
         await self._log_event("Session stopped", "warn")
         await self.broadcast({"type": "pipeline_reset", "data": _IDLE_STATUS})
         await self._emit_status()
 
     async def pause(self, paused: bool) -> None:
         self.paused = paused
+        if paused:
+            stop_voice()
         await self._log_event("Monitoring paused" if paused else "Monitoring resumed", "info")
         await self._emit_status()
 
     async def set_muted(self, muted: bool) -> None:
         self.muted = muted
+        if muted:
+            stop_voice()
         await self._log_event("Voice muted" if muted else "Voice unmuted", "info")
         await self._emit_status()
 
     async def set_demo_mode(self, enabled: bool) -> None:
         self.demo_mode = enabled
+        reset_voice()
         await self._log_event(
             "Demo Mode enabled — simulating live frames" if enabled else "Demo Mode disabled — using live camera",
             "info",
@@ -170,12 +184,16 @@ class SessionManager:
         if self.last_event is not None:
             await self.broadcast({"type": "replay", "data": self.last_event.to_dict()})
             await self._log_event("Replaying last guidance", "info")
+            if not self.muted and self.last_event.voice_guidance.strip():
+                self._play_voice(self.last_event, force=True)
 
     async def snapshot_capture(self) -> None:
         await self._log_event(f"Snapshot captured at {utc_now_iso()}", "success")
 
     # ------------------------------------------------------- live frame ingest
     async def ingest_frame(self, frame_data_url: str) -> PipelineEvent:
+        if not self.running or self.paused or self.demo_mode:
+            raise RuntimeError("session is not accepting live frames")
         self._frame_index += 1
         self._seq += 1
         event = await asyncio.to_thread(
@@ -184,6 +202,7 @@ class SessionManager:
         event.seq = self._seq
         await self._log_event(f"{event.frame_id} analyzed (live)", "info")
         await self._emit_event(event)
+        self._play_voice(event)
         return event
 
     # ---------------------------------------------------------------- demo loop
@@ -231,15 +250,43 @@ class SessionManager:
             )
         await self._log_event("Kimi K2 generated guidance", "info")
         await self._emit_event(event)
-        if event.speak and not self.muted:
-            await self._log_event("Voice instruction streamed", "success")
+
+    def _infer_direction(self, template: dict[str, Any], hazard: bool) -> str | None:
+        from guidance_speech import normalize_direction
+
+        if not hazard:
+            return None
+        if raw := template.get("direction"):
+            return normalize_direction(str(raw))
+        action = str(template.get("safest_next_action", "")).lower()
+        for direction in ("right", "left", "straight"):
+            if direction in action:
+                return direction  # type: ignore[return-value]
+        if "stop" in action or "do not" in action:
+            return "stop"
+        return "right"
+
+    def _play_voice(self, event: PipelineEvent, *, force: bool = False) -> None:
+        if not self.running or self.muted or not event.voice_guidance.strip():
+            return
+        if not force:
+            if self.demo_mode or not event.speak:
+                return
+            if not voice_cooldown_allows():
+                return
+        try:
+            speak_with_fallback(event.voice_guidance, blocking=False)
+            mark_voice_played()
+        except Exception as exc:  # noqa: BLE001 - voice must not crash the session
+            asyncio.create_task(self._log_event(f"Voice playback failed: {exc}", "warn"))
+            return
+        asyncio.create_task(self._log_event("Voice instruction streamed (GMI TTS)", "success"))
 
     def _build_demo_event(self, template: dict[str, Any]) -> PipelineEvent:
         durations = {
             "camera": random.randint(8, 18),
             "frame_sharding": random.randint(10, 25),
             "vision_models": random.randint(140, 260),
-            "cloudflare_tunnel": random.randint(20, 60),
             "kimi_k2": random.randint(480, 760),
             "tts": random.randint(150, 280),
             "speaker": random.randint(40, 90),
@@ -256,8 +303,12 @@ class SessionManager:
         )
         for key, value in template.items():
             setattr(event, key, value)
-        if self.muted:
-            event.speak = False
+
+        hazard = bool(event.detected_hazards)
+        direction = self._infer_direction(template, hazard)
+        event.voice_guidance = spoken_guidance(hazard, direction)
+        # Demo loop cycles clear/hazard frames — never auto-play TTS (use Replay).
+        event.speak = False
         return event
 
     async def _animate_pipeline(self, event: PipelineEvent) -> None:

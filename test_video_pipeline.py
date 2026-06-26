@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test video-chunk pipeline: Omni → Kimi, with GPT-5.5 ffmpeg fallback."""
+"""Test video-chunk pipeline: middle-frame extract → GMI GPT-5.5."""
 
 from __future__ import annotations
 
@@ -58,7 +58,7 @@ def main() -> int:
 
     reset_state()
     debouncer = GuidanceDebouncer()
-    backends: dict[str, int] = {"omni_kimi": 0, "gpt55_fallback": 0, "errors": 0}
+    backends: dict[str, int] = {"gmi": 0, "errors": 0}
     spoke = 0
 
     for video in videos:
@@ -85,8 +85,7 @@ def main() -> int:
         print()
 
     print("=== Summary ===")
-    print(f"  Omni+Kimi:        {backends.get('omni_kimi', 0)}")
-    print(f"  GPT-5.5 fallback: {backends.get('gpt55_fallback', 0)}")
+    print(f"  GMI GPT-5.5:      {backends.get('gmi', 0)}")
     print(f"  Errors:           {backends.get('errors', 0)}")
     print(f"  Debouncer spoke:  {spoke} time(s)")
 

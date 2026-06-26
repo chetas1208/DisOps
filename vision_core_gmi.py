@@ -12,7 +12,7 @@ import requests
 from vision_core import PROMPT, GuidanceResult, _parse_guidance
 
 DEFAULT_BASE_URL = "https://api.gmi-serving.com"
-DEFAULT_MODEL = "XiaomiMiMo/MiMo-V2.5"
+DEFAULT_MODEL = "openai/gpt-5.5"
 REQUEST_TIMEOUT_S = float(os.environ.get("GMI_REQUEST_TIMEOUT_S", "30"))
 
 

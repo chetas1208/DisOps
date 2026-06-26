@@ -34,7 +34,10 @@ class GuidanceDebouncer:
         """
         if self._last_spoken is None:
             self._last_spoken = deepcopy(decision)
-            return {"speak": True, "text": decision["text"]}
+            # Stay silent on a clear first frame — only speak when a hazard appears.
+            if decision["hazard"]:
+                return {"speak": True, "text": decision["text"]}
+            return {"speak": False, "text": None}
 
         hazard_changed = decision["hazard"] != self._last_spoken["hazard"]
         direction_changed = (
@@ -99,9 +102,9 @@ TEST_SEQUENCES: dict[str, list[Decision]] = {
 }
 
 EXPECTED_SPEAK_INDICES: dict[str, list[int]] = {
-    "A": [0, 3, 6],
-    "B": [0, 1, 3],
-    "C": [0],
+    "A": [3, 6],
+    "B": [1, 3],
+    "C": [],
 }
 
 

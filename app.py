@@ -7,9 +7,8 @@ Run the real-time disaster-response web app:
     HOST=127.0.0.1 PORT=9000 python app.py
 
 The frontend (served from ./web) connects over a WebSocket and streams the
-Camera → Vision → Cloudflare → Kimi K2 → Voice pipeline live. Demo Mode is on by
-default, so it runs end-to-end with no API keys. Provide GMI_API_KEY /
-GEMINI_API_KEY / NEMOTRON_ENDPOINT_URL to enable real live-camera analysis.
+Camera → GPT-5.5 Vision → Kimi K2 → Voice pipeline live. Demo Mode is off by
+default — start a session to use your camera. Provide GMI_API_KEY for live analysis.
 """
 
 from __future__ import annotations

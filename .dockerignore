@@ -1,0 +1,12 @@
+.git
+.env
+.venv
+venv
+__pycache__
+*.pyc
+test_videos
+test_images
+disops-frame-*
+*.md
+deploy/*.zip
+.github

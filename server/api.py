@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from .config import frontend_config
 from .orchestrator import SessionManager
 from .scenarios import scenario_list
 
@@ -30,6 +31,11 @@ class ToggleBody(BaseModel):
 @app.get("/api/health")
 async def health() -> dict[str, object]:
     return {"ok": True, "app": "DisOps", "status": session.status()}
+
+
+@app.get("/api/config")
+async def get_config() -> JSONResponse:
+    return JSONResponse(frontend_config())
 
 
 @app.get("/api/state")
@@ -102,7 +108,14 @@ class FrameBody(BaseModel):
 
 @app.post("/api/frame")
 async def ingest_frame(body: FrameBody) -> JSONResponse:
-    event = await session.ingest_frame(body.frame)
+    if not session.running:
+        return JSONResponse({"error": "session not running"}, status_code=409)
+    if session.demo_mode:
+        return JSONResponse({"error": "disable demo mode for live frames"}, status_code=409)
+    try:
+        event = await session.ingest_frame(body.frame)
+    except RuntimeError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
     return JSONResponse(event.to_dict())
 
 

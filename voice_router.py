@@ -1,13 +1,14 @@
-"""Voice router — Nemotron primary, ElevenLabs fallback."""
+"""Voice router — GMI TTS primary, ElevenLabs fallback."""
 
 from __future__ import annotations
 
 from typing import Literal
 
 from voice_output import speak as speak_elevenlabs
-from voice_output_nemotron import speak as speak_nemotron
+from voice_output_gmi import speak as speak_gmi
+from voice_output_gmi import stop as stop_gmi
 
-Backend = Literal["nemotron", "elevenlabs_fallback"]
+Backend = Literal["gmi", "elevenlabs_fallback"]
 _last_backend: Backend | None = None
 
 
@@ -25,10 +26,21 @@ def speak_with_fallback(text: str, *, blocking: bool = True) -> None:
         return
 
     try:
-        speak_nemotron(cleaned, blocking=blocking)
-        _last_backend = "nemotron"
-        print("[Nemotron]")
+        speak_gmi(cleaned, blocking=blocking)
+        _last_backend = "gmi"
+        print("[GMI TTS]")
     except Exception as exc:
         _last_backend = "elevenlabs_fallback"
         print(f"[ElevenLabs fallback] — {exc}")
         speak_elevenlabs(cleaned, blocking=blocking)
+
+
+def stop_voice() -> None:
+    """Halt any in-progress TTS playback."""
+    stop_gmi()
+    try:
+        import sounddevice as sd
+
+        sd.stop()
+    except Exception:
+        pass

@@ -1,0 +1,42 @@
+name: Build and push DisOps to GHCR
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, shresth]
+    paths:
+      - "Dockerfile"
+      - "requirements.txt"
+      - "app.py"
+      - "server/**"
+      - "web/**"
+      - "vision_*.py"
+      - "voice_*.py"
+      - "guidance_speech.py"
+      - "debounce.py"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/disops:latest
+            ghcr.io/${{ github.repository_owner }}/disops:${{ github.sha }}

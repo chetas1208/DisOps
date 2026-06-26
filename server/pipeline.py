@@ -21,8 +21,11 @@ import time
 from pathlib import Path
 from typing import Any
 
+from guidance_speech import normalize_direction, spoken_guidance
+
 from .models import PipelineEvent, utc_now_iso
 from .reasoning import reason as kimi_reason, reasoning_available
+from .voice import evaluate_voice
 
 _HAZARD_KEYWORDS: dict[str, tuple[str, ...]] = {
     "fire": ("fire", "flame", "flames", "burning"),
@@ -74,12 +77,8 @@ def _direction_phrase(direction: str | None) -> str:
 
 
 def vision_available() -> bool:
-    """True if at least one real vision backend could plausibly run."""
-    return bool(
-        os.environ.get("GMI_API_KEY")
-        or os.environ.get("GEMINI_API_KEY")
-        or os.environ.get("NEMOTRON_ENDPOINT_URL")
-    )
+    """True if GMI GPT-5.5 vision is configured."""
+    return bool(os.environ.get("GMI_API_KEY"))
 
 
 def analyze_frame(frame_data_url: str, *, frame_index: int) -> PipelineEvent:
@@ -106,15 +105,15 @@ def analyze_frame(frame_data_url: str, *, frame_index: int) -> PipelineEvent:
 
         hazard = bool(result.get("hazard"))
         text = str(result.get("text", "")).strip() or "Scene analyzed."
-        direction = result.get("direction")
+        direction = normalize_direction(result.get("direction"))
         hazards = _classify_hazards(text)
         urgency = _urgency_for(hazard, hazards, direction)
-        backend = (last_backend() or "vision").replace("_", " ")
+        backend = (last_backend() or "gmi").replace("_", " ")
         people = 1 if re.search(r"person|people|crowd", text.lower()) else 0
 
         # Heuristic defaults — overridden by GMI Kimi K2 reasoning when available.
         situation = text if hazard else "No active incident."
-        voice_guidance = text if hazard else "All clear. Continue monitoring."
+        voice_guidance, should_speak = evaluate_voice(hazard, direction)
         reasoning_summary = (
             f"{backend} backend flagged a hazard; recommending the clearest path."
             if hazard
@@ -138,7 +137,6 @@ def analyze_frame(frame_data_url: str, *, frame_index: int) -> PipelineEvent:
                 kimi_ms = int((time.perf_counter() - t1) * 1000)
                 urgency = guidance["urgency"]
                 situation = guidance["situation"] or situation
-                voice_guidance = guidance["voice_guidance"] or voice_guidance
                 reasoning_summary = guidance["reasoning_summary"] or reasoning_summary
                 next_check = guidance["next_check"] or next_check
                 safest_next_action = guidance["safest_next_action"] or safest_next_action
@@ -170,7 +168,7 @@ def analyze_frame(frame_data_url: str, *, frame_index: int) -> PipelineEvent:
                 "tts": 180,
             },
             source="live",
-            speak=hazard,
+            speak=should_speak,
             scenario="live",
             timestamp=utc_now_iso(),
         )

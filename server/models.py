@@ -19,7 +19,6 @@ PIPELINE_STAGES: tuple[str, ...] = (
     "camera",
     "frame_sharding",
     "vision_models",
-    "cloudflare_tunnel",
     "kimi_k2",
     "tts",
     "speaker",
@@ -79,7 +78,7 @@ class PipelineEvent:
 
     scenario: str = "no_hazard"
     source: Literal["demo", "live"] = "demo"
-    speak: bool = True
+    speak: bool = False
     timestamp: str = field(default_factory=utc_now_iso)
     seq: int = 0
 

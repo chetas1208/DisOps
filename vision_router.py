@@ -1,15 +1,14 @@
-"""Vision router — GMI primary, Nemotron secondary, Gemini fallback."""
+"""Vision router — GMI GPT-5.5 only."""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Literal
 
-from vision_core import GuidanceResult, analyze_hallway as analyze_hallway_gemini
+from vision_core import GuidanceResult
 from vision_core_gmi import analyze_hallway as analyze_hallway_gmi
-from vision_core_nemotron import analyze_hallway as analyze_hallway_nemotron
 
-Backend = Literal["gmi", "nemotron", "gemini_fallback"]
+Backend = Literal["gmi"]
 _last_backend: Backend | None = None
 
 
@@ -37,31 +36,12 @@ def last_backend() -> Backend | None:
 
 
 def analyze_hallway_with_fallback(image_path: str | Path) -> GuidanceResult:
-    """
-    Try vision backends in order: GMI → Nemotron → Gemini.
-
-    Each attempt is logged to stdout so you can see which backend ran.
-    """
+    """Analyze one still frame via GMI GPT-5.5 vision."""
     global _last_backend
     name = Path(image_path).name
-    errors: list[str] = []
 
-    for backend, fn in (
-        ("gmi", analyze_hallway_gmi),
-        ("nemotron", analyze_hallway_nemotron),
-    ):
-        try:
-            result = fn(image_path)
-            _validate_result(result)
-            _last_backend = backend
-            print(f"[{backend.capitalize()}] {name}")
-            return result
-        except Exception as exc:
-            errors.append(f"{backend}: {exc}")
-            print(f"[{backend.capitalize()} failed] {name} — {exc}")
-
-    _last_backend = "gemini_fallback"
-    print(f"[Gemini fallback] {name} — {'; '.join(errors)}")
-    result = analyze_hallway_gemini(image_path)
+    result = analyze_hallway_gmi(image_path)
     _validate_result(result)
+    _last_backend = "gmi"
+    print(f"[Gmi] {name}")
     return result
