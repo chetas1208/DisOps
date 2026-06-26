@@ -127,7 +127,6 @@ const state = {
 };
 
 let mediaStream = null;
-let frameTimer = null;
 let speaking = false;
 
 /* ============================================================================
@@ -520,13 +519,15 @@ function setWaveform(on) {
    CAMERA — live feed + frame capture loop
    ============================================================================ */
 async function startCamera() {
-  if (mediaStream) return;
+  if (mediaStream) return true;
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
     attachStream();
+    return true;
   } catch {
     mediaStream = null;
     drawFallback();
+    return false;
   }
 }
 function attachStream() {
@@ -562,17 +563,69 @@ function drawFallback() {
   ctx.textAlign = "center";
   ctx.fillText("Camera feed unavailable — Demo Mode active", canvas.width / 2, canvas.height / 2);
 }
-function startFrameLoop() {
-  stopFrameLoop();
-  // Only push real frames when a live backend is configured and demo mode is off.
-  frameTimer = setInterval(async () => {
-    if (!state.status.running || state.status.paused || state.status.demo_mode) return;
-    const frame = captureFrame();
-    if (frame) await API.frame(frame);
-  }, 2500);
+/* Adaptive real-time loop: analyze one frame, and as soon as the pipeline
+   returns, capture the next. This runs as fast as the models allow (no fixed
+   timer, no overlapping requests) so the feed is genuinely live rather than a
+   scripted cadence. */
+let liveActive = false;
+let liveAnimTimers = [];
+
+function startLiveLoop() {
+  if (liveActive) return;
+  liveActive = true;
+  liveTick();
 }
-function stopFrameLoop() {
-  if (frameTimer) { clearInterval(frameTimer); frameTimer = null; }
+function stopLiveLoop() {
+  liveActive = false;
+  clearLiveAnim();
+}
+async function liveTick() {
+  if (!liveActive) return;
+  // Idle politely if paused, stopped, or the user flipped back to Demo Mode.
+  if (!state.status.running || state.status.paused || state.status.demo_mode) {
+    if (liveActive) setTimeout(liveTick, 600);
+    return;
+  }
+  const frame = captureFrame();
+  if (!frame) {
+    if (liveActive) setTimeout(liveTick, 600);
+    return;
+  }
+  animateLiveProcessing();
+  const t0 = performance.now();
+  try {
+    await API.frame(frame); // result also arrives over the WebSocket
+  } catch {
+    /* keep the loop alive on transient errors */
+  }
+  // Small breath so the speaker/animation can settle, then analyze the next frame.
+  const gap = Math.max(150, 400 - (performance.now() - t0));
+  if (liveActive) setTimeout(liveTick, gap);
+}
+
+function clearLiveAnim() {
+  liveAnimTimers.forEach(clearTimeout);
+  liveAnimTimers = [];
+}
+function liveStatuses(active) {
+  const order = ["camera", "frame_sharding", "vision_models", "cloudflare_tunnel", "kimi_k2", "tts", "speaker"];
+  const idx = order.indexOf(active);
+  const out = {};
+  order.forEach((k, i) => (out[k] = i < idx ? "complete" : i === idx ? "processing" : "idle"));
+  return out;
+}
+function animateLiveProcessing() {
+  clearLiveAnim();
+  renderPipeline(liveStatuses("vision_models"), {});
+  liveAnimTimers.push(setTimeout(() => renderPipeline(liveStatuses("kimi_k2"), {}), 3200));
+  liveAnimTimers.push(setTimeout(() => renderPipeline(liveStatuses("tts"), {}), 5200));
+}
+function renderLivePipelineComplete(ev) {
+  clearLiveAnim();
+  const dur = ev.stage_durations || {};
+  const statuses = {};
+  STAGES.forEach((s) => (statuses[s.key] = "complete"));
+  renderPipeline(statuses, dur);
 }
 function captureFrame() {
   const video = $("#cam");
@@ -589,15 +642,29 @@ function captureFrame() {
    ============================================================================ */
 async function toggleSession() {
   if (state.status.running) {
+    stopLiveLoop();
     await API.stop();
     stopCamera();
-    stopFrameLoop();
     window.speechSynthesis?.cancel();
     setWaveform(false);
   } else {
-    await startCamera();
+    const camOk = await startCamera();
+    // Prefer genuine real-time analysis: when a camera and a live vision backend
+    // are both available, switch out of the scripted Demo loop and stream frames.
+    const goLive = camOk && state.status.vision_backend_available;
+    if (goLive && state.status.demo_mode) await API.demoMode(false); // before start: no scripted flash
     await API.start();
-    startFrameLoop();
+    if (goLive) {
+      startLiveLoop();
+    } else {
+      appendLog({
+        time: nowClock(),
+        level: "warn",
+        message: camOk
+          ? "Live vision backend unavailable — running scripted Demo Mode."
+          : "Camera unavailable — running scripted Demo Mode. Allow camera access for real-time.",
+      });
+    }
   }
 }
 async function toggleMute() {
@@ -640,12 +707,16 @@ function handleMessage({ type, data }) {
       state.status = data;
       renderTopMeta(); renderChips(); renderControls(); renderGuidancePanel();
       if (!data.running) { renderBanner(); applyUrgency(); renderVideoPanel(); }
+      // React to live/Demo toggles flipped while a session is running.
+      if (data.running && !data.demo_mode && data.vision_backend_available && mediaStream) startLiveLoop();
+      if (data.demo_mode) stopLiveLoop();
       break;
     case "event":
       state.event = data;
       applyUrgency();
       renderTopMeta(); renderChips(); renderBanner();
       renderVideoPanel(); renderGuidancePanel(); renderSceneAnalysis(); renderReasoning();
+      if (data.source === "live") renderLivePipelineComplete(data);
       if (data.speak && !state.status.muted) speak(data.voice_guidance);
       break;
     case "replay":
