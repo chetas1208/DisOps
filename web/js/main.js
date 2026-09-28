@@ -462,15 +462,25 @@ function renderBanner() {
    GLOBAL RENDER + URGENCY THEME
    ============================================================================ */
 function applyUrgency() {
-  const urgency = (state.status.running && state.event?.urgency) || "Low";
-  document.documentElement.setAttribute("data-urgency", urgency);
+  const running = state.status.running;
+  const urgency = (running && state.event?.urgency) || "Low";
+  const root = document.documentElement;
+  root.setAttribute("data-urgency", urgency);
+  root.setAttribute("data-running", running ? "true" : "false");
+}
+function flashEvent() {
+  const root = document.documentElement;
+  root.setAttribute("data-event", "true");
+  clearTimeout(flashEvent._t);
+  flashEvent._t = setTimeout(() => root.removeAttribute("data-event"), 1200);
 }
 function renderTopMeta() {
   $("#latency-value").textContent = state.event?.latency_ms ? `${state.event.latency_ms}ms` : "—";
   $("#interval-value").textContent = `${state.status.frame_interval_s || 2.5}s`;
   const btn = $("#session-btn");
   btn.textContent = state.status.running ? "Stop Session" : "Start Session";
-  btn.className = state.status.running ? "btn btn--danger" : "btn btn--primary";
+  btn.className = state.status.running ? "btn btn--stop" : "btn btn--primary";
+  btn.setAttribute("aria-pressed", state.status.running ? "true" : "false");
 }
 function renderAll() {
   applyUrgency();
@@ -705,8 +715,9 @@ function handleMessage({ type, data }) {
       break;
     case "status":
       state.status = data;
+      applyUrgency();
       renderTopMeta(); renderChips(); renderControls(); renderGuidancePanel();
-      if (!data.running) { renderBanner(); applyUrgency(); renderVideoPanel(); }
+      if (!data.running) { renderBanner(); renderVideoPanel(); }
       // React to live/Demo toggles flipped while a session is running.
       if (data.running && !data.demo_mode && data.vision_backend_available && mediaStream) startLiveLoop();
       if (data.demo_mode) stopLiveLoop();
@@ -714,6 +725,7 @@ function handleMessage({ type, data }) {
     case "event":
       state.event = data;
       applyUrgency();
+      flashEvent();
       renderTopMeta(); renderChips(); renderBanner();
       renderVideoPanel(); renderGuidancePanel(); renderSceneAnalysis(); renderReasoning();
       if (data.source === "live") renderLivePipelineComplete(data);
